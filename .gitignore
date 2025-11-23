@@ -1,0 +1,7 @@
+.pytext_cache/
+transformers-endocs/
+.vscode/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
