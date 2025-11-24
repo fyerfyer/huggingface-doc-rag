@@ -9,12 +9,16 @@ HFO_BEGIN = re.compile(r"<hfoptions.*?>", re.I)
 HFO_OPTION = re.compile(r"<hfoption\s+id=\"([^\"]+)\".*?>", re.I)
 HFO_END = re.compile(r"</hfoptions>", re.I)
 MARKDOWN_LINK_RE = re.compile(r"(\[.*?\])\((.*?)\)")  
+CODE_LINK_RE = re.compile(r"\[(.*?)\]")
 IMG_DIV_RE = re.compile(r'<div[^>]*>\s*<img\s+src="([^"]+)"[^>]*/>\s*</div>',re.IGNORECASE)                                                                                               
            
 TIP_TAG = re.compile(r"<tip>\s*(.*?)\s*</tip>", flags=re.DOTALL | re.IGNORECASE)
 NOTE_TAG = re.compile(r"<note>\s*(.*?)\s*</note>", flags=re.DOTALL | re.IGNORECASE)
 WARNING_TAG = re.compile(r"<warning>\s*(.*?)\s*</warning>", flags=re.DOTALL | re.IGNORECASE)
 SUP_TAG = re.compile(r"<sup>(.*?)</sup>", flags=re.IGNORECASE)
+
+# Matches tiktoken-style special tokens like <|endoftext|>
+SPECIAL_TOKEN_RE = re.compile(r"<\|([^|<>]+)\|>")
 
 def main():
   parser = argparse.ArgumentParser(description="Preprocess HuggingFace document")
@@ -23,36 +27,39 @@ def main():
   args = parser.parse_args()
 
   root_path = Path(args.root).resolve()
-  output_path = Path(args.output)
+  output_path = Path(args.output).resolve()
 
   all_unsolved_links = []
   
-  with open(output_path, 'w', encoding='utf-8') as f_out:
-    for md_path in root_path.rglob('*.md'):
-      if any(part.startswith('.') for part in md_path.parts) or "contributing" in md_path.name:
-        continue
-      
-      print(f"Processing: {md_path.relative_to(root_path)}")
-      
-      with open(md_path, 'r', encoding='utf-8') as f_in:
-        text = f_in.read()
-      
-      # Clean the markdown
-      cleaned_text, unsolved_links = clean_hf_markdown(text, str(md_path))
-      
-      # Record unsolved links
-      if unsolved_links:
-        all_unsolved_links.append((str(md_path.relative_to(root_path)), unsolved_links))
-      
-      # Write cleaned content
-      f_out.write(f"\n{'='*80}\n")
-      f_out.write(f"File: {md_path.relative_to(root_path)}\n")
-      f_out.write(f"{'='*80}\n\n")
+  # Create output directory if it doesn't exist
+  output_path.mkdir(parents=True, exist_ok=True)
+  
+  for md_path in root_path.rglob('*.md'):
+    if any(part.startswith('.') for part in md_path.parts) or "contributing" in md_path.name:
+      continue
+    
+    print(f"Processing: {md_path.relative_to(root_path)}")
+    
+    with open(md_path, 'r', encoding='utf-8') as f_in:
+      text = f_in.read()
+    
+    cleaned_text, unsolved_links = clean_hf_markdown(text, str(md_path))
+    
+    if unsolved_links:
+      all_unsolved_links.append((str(md_path.relative_to(root_path)), unsolved_links))
+    
+    relative_path = md_path.relative_to(root_path)
+    output_file_path = output_path / relative_path
+    
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_file_path, 'w', encoding='utf-8') as f_out:
       f_out.write(cleaned_text)
-      f_out.write("\n\n")
+    
+    print(f"  ✓ Saved to: {output_file_path.relative_to(output_path)}")
   
   if all_unsolved_links:
-    print("\n⚠️  Unsolved links found:")
+    print("\n! Unsolved links found:")
     for file_path, links in all_unsolved_links:
       print(f"  {file_path}:")
       for link in links:
@@ -62,12 +69,21 @@ def main():
 
 def clean_hf_markdown(text: str, file_path: str) -> Tuple[str, List[str]]:
   text = _strip_license(text)
+  text = _sanitize_special_tokens(text)
   text = _convert_hfoptions(text)
   text, unsolved_links = _patch_relative_links(text, file_path)
   text = _handle_html_images(text, file_path)
   text = _convert_html_fragments(text)
+  text = _convert_markdown_code_references(text)
   text = _normalize_whitespace(text)
   return text, unsolved_links
+
+def _sanitize_special_tokens(text: str) -> str:
+  """Replace tiktoken-style special tokens (e.g. <|endoftext|>) with a
+  safe, human-readable placeholder so downstream tokenizers won't raise
+  on disallowed special tokens. We keep the inner token name for traceability.
+  """
+  return SPECIAL_TOKEN_RE.sub(lambda m: f"[SPECIAL_TOKEN:{m.group(1)}]", text)
 
 def _strip_license(text: str) -> str:
   return LICENSE_RE.sub("", text)
@@ -169,6 +185,8 @@ def _convert_html_fragments(text: str) -> str:
   text = SUP_TAG.sub(r"^\1^", text)
   return text 
 
+def _convert_markdown_code_references(text: str) -> str: 
+  return CODE_LINK_RE.sub(r"\1", text)
 
 if __name__ == "__main__":
   main()
