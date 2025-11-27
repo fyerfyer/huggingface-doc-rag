@@ -1,0 +1,7 @@
+sentence-transformers
+python-dotenv
+openai
+httpx
+qdrant-client
+google-colab
+transformers
