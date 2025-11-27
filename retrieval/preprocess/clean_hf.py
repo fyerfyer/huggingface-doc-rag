@@ -17,13 +17,19 @@ NOTE_TAG = re.compile(r"<note>\s*(.*?)\s*</note>", flags=re.DOTALL | re.IGNORECA
 WARNING_TAG = re.compile(r"<warning>\s*(.*?)\s*</warning>", flags=re.DOTALL | re.IGNORECASE)
 SUP_TAG = re.compile(r"<sup>(.*?)</sup>", flags=re.IGNORECASE)
 
-# Matches tiktoken-style special tokens like <|endoftext|>
+# 额外的 HTML 标签清理
+IFRAME_RE = re.compile(r'<iframe[^>]*>.*?</iframe>', flags=re.DOTALL | re.IGNORECASE)
+FIGURE_RE = re.compile(r'<figure[^>]*>(.*?)</figure>', flags=re.DOTALL | re.IGNORECASE)
+IMG_TAG_RE = re.compile(r'<img\s+[^>]*src="([^"]+)"[^>]*/>', flags=re.IGNORECASE)
+TABLE_RE = re.compile(r'<table[^>]*>.*?</table>', flags=re.DOTALL | re.IGNORECASE)
+HTML_COMMENT_RE = re.compile(r'<!--.*?-->', flags=re.DOTALL)
+STYLE_SCRIPT_RE = re.compile(r'<(style|script)[^>]*>.*?</\1>', flags=re.DOTALL | re.IGNORECASE)
 SPECIAL_TOKEN_RE = re.compile(r"<\|([^|<>]+)\|>")
 
 def main():
   parser = argparse.ArgumentParser(description="Preprocess HuggingFace document")
-  parser.add_argument('--root', type=str, required=True)
-  parser.add_argument('--output', type=str, required=True)
+  parser.add_argument('--root', type=str, default='transformers-endocs')
+  parser.add_argument('--output', type=str, default='preprocessed')
   args = parser.parse_args()
 
   root_path = Path(args.root).resolve()
@@ -31,7 +37,6 @@ def main():
 
   all_unsolved_links = []
   
-  # Create output directory if it doesn't exist
   output_path.mkdir(parents=True, exist_ok=True)
   
   for md_path in root_path.rglob('*.md'):
@@ -74,6 +79,7 @@ def clean_hf_markdown(text: str, file_path: str) -> Tuple[str, List[str]]:
   text, unsolved_links = _patch_relative_links(text, file_path)
   text = _handle_html_images(text, file_path)
   text = _convert_html_fragments(text)
+  text = _remove_unwanted_html(text)
   text = _convert_markdown_code_references(text)
   text = _normalize_whitespace(text)
   return text, unsolved_links
@@ -184,6 +190,48 @@ def _convert_html_fragments(text: str) -> str:
   text = WARNING_TAG.sub(r"> **Warning**\n> \1", text)
   text = SUP_TAG.sub(r"^\1^", text)
   return text 
+
+def _remove_unwanted_html(text: str) -> str:
+  text = IFRAME_RE.sub('[Interactive Demo - See online documentation]', text)
+  text = STYLE_SCRIPT_RE.sub('', text)
+  text = HTML_COMMENT_RE.sub('', text)
+  
+  def handle_figure(match):
+    content = match.group(1)
+    # 提取 figcaption
+    figcaption_match = re.search(r'<figcaption[^>]*>(.*?)</figcaption>', content, re.DOTALL | re.IGNORECASE)
+    if figcaption_match:
+      return f"\n{figcaption_match.group(1).strip()}\n"
+    return content
+  
+  text = FIGURE_RE.sub(handle_figure, text)
+  
+  def handle_img(match):
+    src = match.group(1)
+    return f"[Image: {Path(src).name}]"
+  
+  text = IMG_TAG_RE.sub(handle_img, text)
+  
+  # TODO: 移除 HTML 表格（通常在 markdown 中已经有对应的表格）
+  # 如果需要保留表格，可以尝试转换为 markdown 表格
+  text = TABLE_RE.sub('[Table - See online documentation]', text)
+  
+  # 移除常见的 HTML 标签，保留内容
+  text = re.sub(r'</?(?:div|span|p|section|article|header|footer|nav|aside|main)[^>]*>', '', text, flags=re.IGNORECASE)
+  
+  # <br> 换行符转为真正的换行
+  text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+  
+  # <hr> 分隔符转为 markdown
+  text = re.sub(r'<hr\s*/?>', '\n---\n', text, flags=re.IGNORECASE)
+  
+  # 移除其他单个标签（如 <strong>, <em>, <b>, <i> 等，保留内容）
+  text = re.sub(r'</?(?:strong|em|b|i|u|mark|small|del|ins|sub|code|kbd|var|samp)[^>]*>', '', text, flags=re.IGNORECASE)
+  
+  # 移除所有剩余的 HTML 标签
+  text = re.sub(r'<[^>]+>', '', text)
+  
+  return text
 
 def _convert_markdown_code_references(text: str) -> str: 
   return CODE_LINK_RE.sub(r"\1", text)
