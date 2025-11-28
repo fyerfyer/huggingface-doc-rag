@@ -85,10 +85,6 @@ def clean_hf_markdown(text: str, file_path: str) -> Tuple[str, List[str]]:
   return text, unsolved_links
 
 def _sanitize_special_tokens(text: str) -> str:
-  """Replace tiktoken-style special tokens (e.g. <|endoftext|>) with a
-  safe, human-readable placeholder so downstream tokenizers won't raise
-  on disallowed special tokens. We keep the inner token name for traceability.
-  """
   return SPECIAL_TOKEN_RE.sub(lambda m: f"[SPECIAL_TOKEN:{m.group(1)}]", text)
 
 def _strip_license(text: str) -> str:
